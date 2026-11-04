@@ -33,6 +33,9 @@ Open http://localhost:3000 and sign in with PIN `123456`:
 | `manager@example.com` | Manager |
 | `associate@example.com` | Associate |
 
+### Using Supabase instead of local Postgres
+Create a **new, separate** Supabase project for the demo and put its connection strings in `.env` (`DIRECT_URL`, `DATABASE_URL`). Then run `npx prisma db push` and `CONFIRM_WIPE=<your-db-host> npx tsx prisma/seed-demo.ts`. The seed deletes all rows, so it refuses to run against a non-local host unless you pass `CONFIRM_WIPE` with that exact host. Never point it at a database with real data.
+
 Re-running the seed resets the database to the same fictional dataset (dates are relative to today).
 
 Documentation lives in [`docs/wiki`](docs/wiki/README.md).

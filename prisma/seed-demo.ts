@@ -102,7 +102,22 @@ async function wipe() {
   await prisma.team.deleteMany();
 }
 
+function assertSafeTarget() {
+  // This script DELETES every row in every table. Never let it run against a
+  // database by accident: localhost is allowed; anything else (e.g. Supabase)
+  // requires CONFIRM_WIPE=<exact database host>.
+  const url = new URL(process.env.DIRECT_URL ?? "");
+  const host = url.hostname;
+  const isLocal = ["localhost", "127.0.0.1"].includes(host);
+  if (!isLocal && process.env.CONFIRM_WIPE !== host) {
+    console.error(`Refusing to wipe and seed remote database "${host}".`);
+    console.error(`If this is your DEMO database, re-run with CONFIRM_WIPE=${host}`);
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertSafeTarget();
   console.log("Seeding demo data (all fictional)...");
   await wipe();
   const hash = await bcrypt.hash(DEMO_PIN, 10);
