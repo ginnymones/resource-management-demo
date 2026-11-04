@@ -1,0 +1,354 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  Associate
+  SME
+  POC
+  Manager
+  Senior_Leader
+  Admin
+}
+
+enum ProficiencyLevel {
+  Expert
+  Proficient
+  Trained
+  Not_Trained
+}
+
+enum RequestStatus {
+  Draft
+  Pending
+  Pending_Unroutable
+  Approved
+  Partially_Approved
+  Active
+  Completed
+  Rejected
+  Cancelled
+}
+
+enum ApprovalStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+enum ApprovalActionType {
+  Approve
+  Reject
+  Override
+  Escalate
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  name                String
+  level               String?   @map("level")
+  location            String?   @map("location")
+  jobTitle            String?   @map("job_title")
+  role                Role      @default(Associate)
+  passwordHash        String    @map("password_hash")
+  teamId              String?   @map("team_id")
+  reportsTo           String?   @map("reports_to")
+  isOnLeave           Boolean   @default(false) @map("is_on_leave")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  team            Team?             @relation("TeamMembers", fields: [teamId], references: [id])
+  manager         User?             @relation("ReportsTo", fields: [reportsTo], references: [id])
+  directReports   User[]            @relation("ReportsTo")
+  associate       Associate?
+  requests        ResourceRequest[]
+  approvalActions ApprovalAction[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  timeEntries     TimeEntry[]       @relation("EnteredBy")
+  processOwners   ProcessOwner[]
+
+  @@map("users")
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  managerId String?  @map("manager_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  members    User[]      @relation("TeamMembers")
+  associates Associate[]
+
+  @@map("teams")
+}
+
+model Associate {
+  id                 String    @id @default(uuid())
+  userId             String    @unique @map("user_id")
+  name               String
+  teamId             String    @map("team_id")
+  bandwidthCache     Float?    @map("bandwidth_cache")
+  bandwidthUpdatedAt DateTime? @map("bandwidth_updated_at")
+  currentStatus      String?   @default("Stop") @map("current_status")
+  currentSubStatus   String?   @map("current_sub_status")
+  statusUpdatedAt    DateTime? @map("status_updated_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user              User               @relation(fields: [userId], references: [id])
+  team              Team               @relation(fields: [teamId], references: [id])
+  skills            AssociateSkill[]
+  timeEntries       TimeEntry[]
+  trainings         Training[]
+  requestAssociates RequestAssociate[]
+  approvalActions   ApprovalAction[]
+
+  // Performance indexes
+  @@index([teamId], map: "idx_associates_team")
+  // Note: Filtered index idx_associates_bandwidth ON associates(bandwidth_cache) WHERE bandwidth_cache > 0
+  // must be created via raw SQL migration (Prisma does not support partial/filtered indexes natively)
+
+  @@map("associates")
+}
+
+model Skill {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  category  String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  associateSkills AssociateSkill[]
+
+  @@map("skills")
+}
+
+model AssociateSkill {
+  id          String           @id @default(uuid())
+  associateId String           @map("associate_id")
+  skillId     String           @map("skill_id")
+  proficiency ProficiencyLevel
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  associate Associate @relation(fields: [associateId], references: [id])
+  skill     Skill     @relation(fields: [skillId], references: [id])
+
+  // Constraints
+  @@unique([associateId, skillId])
+  // Performance indexes
+  @@index([associateId, skillId, proficiency], map: "idx_associate_skills_proficiency")
+
+  @@map("associate_skills")
+}
+
+model Process {
+  id               String   @id @default(uuid())
+  name             String   @unique
+  complexityFactor Float    @map("complexity_factor")
+  description      String?
+  parentId         String?  @map("parent_id")
+  vertical         String?
+  category         String?
+  isActive         Boolean  @default(true) @map("is_active")
+  plannedHC        Int?     @map("planned_hc")
+  actualHC         Int?     @map("actual_hc")
+  trainedHC        Int?     @map("trained_hc")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  parent           Process?  @relation("ProcessHierarchy", fields: [parentId], references: [id])
+  children         Process[] @relation("ProcessHierarchy")
+  timeEntries      TimeEntry[]
+  resourceRequests ResourceRequest[]
+  owners           ProcessOwner[]
+
+  @@map("processes")
+}
+
+model ProcessOwner {
+  id        String   @id @default(uuid())
+  processId String   @map("process_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  process Process @relation(fields: [processId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([processId, userId])
+  @@map("process_owners")
+}
+
+model TimeEntry {
+  id          String   @id @default(uuid())
+  associateId String   @map("associate_id")
+  processId   String   @map("process_id")
+  entryDate   DateTime @map("entry_date") @db.Date
+  hours       Float
+  enteredBy   String   @map("entered_by")
+  taskId      String?  @map("task_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  associate Associate @relation(fields: [associateId], references: [id])
+  process   Process   @relation(fields: [processId], references: [id])
+  enteredByUser User  @relation("EnteredBy", fields: [enteredBy], references: [id])
+
+  // Constraints
+  @@unique([associateId, processId, entryDate])
+  // Performance indexes
+  @@index([associateId, entryDate], map: "idx_time_entries_associate_date")
+  @@index([processId, entryDate], map: "idx_time_entries_process_date")
+
+  @@map("time_entries")
+}
+
+model Training {
+  id             String   @id @default(uuid())
+  associateId    String   @map("associate_id")
+  trainingName   String   @map("training_name")
+  completionDate DateTime @map("completion_date") @db.Date
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  associate Associate @relation(fields: [associateId], references: [id])
+
+  @@map("trainings")
+}
+
+model ResourceRequest {
+  id                    String        @id @default(uuid())
+  referenceNumber       String        @unique @map("reference_number")
+  requestorId           String        @map("requestor_id")
+  projectName           String        @map("project_name") @db.VarChar(100)
+  targetProcessId       String        @map("target_process_id")
+  startDate             DateTime      @map("start_date") @db.Date
+  endDate               DateTime      @map("end_date") @db.Date
+  hoursPerDay           Float         @map("hours_per_day")
+  businessJustification String        @map("business_justification") @db.VarChar(1000)
+  status                RequestStatus @default(Draft)
+  isDraft               Boolean       @default(true) @map("is_draft")
+  draftExpiresAt        DateTime?     @map("draft_expires_at")
+  submittedAt           DateTime?     @map("submitted_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  requestor          User               @relation(fields: [requestorId], references: [id])
+  targetProcess      Process            @relation(fields: [targetProcessId], references: [id])
+  requestAssociates  RequestAssociate[]
+  approvalActions    ApprovalAction[]
+  notifications      Notification[]
+
+  // Performance indexes
+  @@index([status], map: "idx_resource_requests_status")
+  @@index([requestorId, status], map: "idx_resource_requests_requestor")
+
+  @@map("resource_requests")
+}
+
+model RequestAssociate {
+  id             String         @id @default(uuid())
+  requestId      String         @map("request_id")
+  associateId    String         @map("associate_id")
+  approvalStatus ApprovalStatus @default(Pending) @map("approval_status")
+  approverId     String?        @map("approver_id")
+  rejectionReason String?       @map("rejection_reason")
+  actedAt        DateTime?      @map("acted_at")
+
+  // Relations
+  request   ResourceRequest @relation(fields: [requestId], references: [id])
+  associate Associate       @relation(fields: [associateId], references: [id])
+
+  @@map("request_associates")
+}
+
+model ApprovalAction {
+  id            String             @id @default(uuid())
+  requestId     String             @map("request_id")
+  approverId    String             @map("approver_id")
+  associateId   String?            @map("associate_id")
+  action        ApprovalActionType
+  justification String?
+  reminderCount Int                @default(0) @map("reminder_count")
+  lastReminderAt DateTime?         @map("last_reminder_at")
+  dueAt         DateTime?          @map("due_at")
+  actedAt       DateTime?          @map("acted_at")
+  createdAt     DateTime           @default(now()) @map("created_at")
+
+  // Relations
+  request   ResourceRequest @relation(fields: [requestId], references: [id])
+  approver  User            @relation(fields: [approverId], references: [id])
+  associate Associate?      @relation(fields: [associateId], references: [id])
+
+  // Performance indexes
+  @@index([approverId, actedAt], map: "idx_approval_actions_approver")
+
+  @@map("approval_actions")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  requestId String?  @map("request_id")
+  type      String
+  title     String
+  body      String
+  isRead    Boolean  @default(false) @map("is_read")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime? @map("expires_at")
+
+  // Relations
+  user    User             @relation(fields: [userId], references: [id])
+  request ResourceRequest? @relation(fields: [requestId], references: [id])
+
+  // Performance indexes
+  @@index([userId, isRead, createdAt], map: "idx_notifications_user_read")
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  action     String
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model Setting {
+  key   String @id
+  value String
+
+  @@map("settings")
+}
